@@ -1,6 +1,15 @@
 const axios = require("axios");
 const FormData = require("form-data");
 
+/**
+ * POST /api/send-photo?botToken=...&chatId=...&threadId=...&caption=...
+ * Body: raw binary (from n8n "n8n Binary File")
+ *
+ * Env fallback:
+ * - BOT_TOKEN
+ * - CHAT_ID
+ */
+
 exports.handler = async (event) => {
   const headers = {
     "Access-Control-Allow-Origin": "*",
@@ -23,26 +32,61 @@ exports.handler = async (event) => {
 
   try {
     const qs = event.queryStringParameters || {};
+
     const botToken = qs.botToken || process.env.BOT_TOKEN;
     const chatId = qs.chatId || process.env.CHAT_ID;
 
+    // threadId optional
+    const threadIdRaw = qs.threadId;
+    const threadId =
+      threadIdRaw !== undefined && threadIdRaw !== null && String(threadIdRaw).trim() !== ""
+        ? Number(threadIdRaw)
+        : undefined;
+
+    // caption optional
+    const captionRaw = qs.caption;
+    const caption =
+      captionRaw !== undefined && captionRaw !== null && String(captionRaw).trim() !== ""
+        ? String(captionRaw)
+        : undefined;
+
     if (!botToken) {
-      return { statusCode: 400, headers, body: JSON.stringify({ ok: false, error: "botToken is required" }) };
-    }
-    if (!chatId) {
-      return { statusCode: 400, headers, body: JSON.stringify({ ok: false, error: "chatId is required" }) };
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ ok: false, error: "botToken is required" }),
+      };
     }
 
-    // n8n Binary File 送來的 raw body，在 Netlify 會以 base64 形式提供
+    if (!chatId) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ ok: false, error: "chatId is required" }),
+      };
+    }
+
+    if (threadIdRaw && Number.isNaN(threadId)) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ ok: false, error: "threadId must be a number" }),
+      };
+    }
+
+    // n8n Binary File -> raw body
     const fileBuffer = event.isBase64Encoded
       ? Buffer.from(event.body || "", "base64")
       : Buffer.from(event.body || "", "utf8");
 
     if (!fileBuffer || fileBuffer.length === 0) {
-      return { statusCode: 400, headers, body: JSON.stringify({ ok: false, error: "Empty file body" }) };
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ ok: false, error: "Empty file body" }),
+      };
     }
 
-    // 將圖檔轉送給 Telegram
     const telegramApiUrl = `https://api.telegram.org/bot${botToken}/sendPhoto`;
 
     const form = new FormData();
@@ -51,6 +95,15 @@ exports.handler = async (event) => {
       filename: "chart.png",
       contentType: "image/png",
     });
+
+    if (threadId !== undefined) {
+      form.append("message_thread_id", String(threadId));
+    }
+
+    if (caption !== undefined) {
+      form.append("caption", caption);
+      // 如果你未來需要 HTML/Markdown，再加 parse_mode
+    }
 
     const resp = await axios.post(telegramApiUrl, form, {
       timeout: 20000,
@@ -62,11 +115,18 @@ exports.handler = async (event) => {
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ ok: true, messageId: resp.data?.result?.message_id }),
+      body: JSON.stringify({
+        ok: true,
+        messageId: resp.data?.result?.message_id,
+      }),
     };
   } catch (err) {
     const status = err.response?.status || 500;
     const desc = err.response?.data?.description || err.message || "Internal error";
-    return { statusCode: status, headers, body: JSON.stringify({ ok: false, error: desc }) };
+    return {
+      statusCode: status,
+      headers,
+      body: JSON.stringify({ ok: false, error: desc }),
+    };
   }
 };
